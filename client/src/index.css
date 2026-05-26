@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  background:
+    radial-gradient(circle at top, rgba(51, 231, 255, 0.10), transparent 30%),
+    radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.10), transparent 25%);
+}
