@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { uploadPDF, chatWithPDF, getJobStatus } from "./lib/api";
+import {
+  uploadPDF,
+  chatWithPDF,
+  getJobStatus,
+  getUploadedPDFs,
+  deletePDFByName,
+} from "./lib/api";
+import VectorSpace from "./VectorSpace"; // 📍 Yeh line add karein
 
 const getInitialTheme = () => {
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -20,6 +27,7 @@ export default function App() {
   const [uploadMessage, setUploadMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [lastUploadedPdfName, setLastUploadedPdfName] = useState("");
   const [messages, setMessages] = useState([
     {
       role: "assistant",
@@ -28,9 +36,17 @@ export default function App() {
     },
   ]);
 
+  const [pdfList, setPdfList] = useState([]);
+  const [selectedPdfName, setSelectedPdfName] = useState("");
+  const [deletingPdf, setDeletingPdf] = useState("");
+
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
   }, [isDark]);
+
+  useEffect(() => {
+    loadPDFs();
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -51,7 +67,115 @@ export default function App() {
     }
   };
 
-  const startPollingJobStatus = (currentJobId) => {
+  const loadPDFs = async (preferredPdfName = "") => {
+    try {
+      const data = await getUploadedPDFs();
+      const pdfs = Array.isArray(data?.pdfs) ? data.pdfs : [];
+      setPdfList(pdfs);
+
+      if (pdfs.length === 0) {
+        setSelectedPdfName("");
+        return;
+      }
+
+      if (preferredPdfName && pdfs.includes(preferredPdfName)) {
+        setSelectedPdfName(preferredPdfName);
+        return;
+      }
+
+      if (selectedPdfName && pdfs.includes(selectedPdfName)) {
+        return;
+      }
+
+      setSelectedPdfName(pdfs[0]);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleDeletePdf = async (pdfName) => {
+    try {
+      setDeletingPdf(pdfName);
+      setErrorMessage("");
+      setUploadMessage("");
+
+      await deletePDFByName(pdfName);
+
+      const remainingPdfs = pdfList.filter((item) => item !== pdfName);
+      setPdfList(remainingPdfs);
+
+      if (remainingPdfs.length === 0) {
+        setSelectedPdfName("");
+      } else if (selectedPdfName === pdfName) {
+        setSelectedPdfName(remainingPdfs[0]);
+      }
+
+      setUploadMessage(`✅ ${pdfName} deleted successfully.`);
+    } catch (error) {
+      setErrorMessage(error.message || "Delete failed.");
+    } finally {
+      setDeletingPdf("");
+    }
+  };
+
+  const handleChat = async () => {
+    if (isProcessingPdf) {
+      setErrorMessage("PDF abhi process ho rahi hai. Please wait.");
+      return;
+    }
+
+    if (!prompt.trim()) {
+      setErrorMessage("Please enter a question.");
+      return;
+    }
+
+    const activePdfName = selectedPdfName || pdfList[0] || null;
+
+    if (!activePdfName) {
+      setErrorMessage("Please upload and select a PDF first.");
+      return;
+    }
+
+    const currentPrompt = prompt.trim();
+    setErrorMessage("");
+    setPrompt("");
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "user",
+        content: currentPrompt,
+        sources: [],
+      },
+    ]);
+
+    try {
+      setChatLoading(true);
+      const data = await chatWithPDF(currentPrompt, activePdfName);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: data?.answer || "No answer received from server.",
+          sources: Array.isArray(data?.sources) ? data.sources : [],
+        },
+      ]);
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: `Error: ${error.message || "Chat request failed."}`,
+          sources: [],
+        },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  const startPollingJobStatus = (currentJobId, uploadedPdfName) => {
     stopPolling();
     setIsProcessingPdf(true);
     setJobStatus("queued");
@@ -65,7 +189,18 @@ export default function App() {
         if (state === "completed") {
           stopPolling();
           setIsProcessingPdf(false);
-          setUploadMessage("✅ PDF processing complete. Ab aap chat kar sakte hain.");
+          setUploadMessage("✅ PDF processing complete. you can now chat with it.");
+
+          await loadPDFs(uploadedPdfName);
+
+          setSelectedFile(null);
+          setLastUploadedPdfName("");
+          setJobId("");
+          setJobStatus("");
+
+          if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+          }
         } else if (state === "failed") {
           stopPolling();
           setIsProcessingPdf(false);
@@ -90,6 +225,9 @@ export default function App() {
     if (file.type !== "application/pdf") {
       setErrorMessage("Please select a valid PDF file.");
       setSelectedFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
       return;
     }
 
@@ -107,6 +245,9 @@ export default function App() {
     }
 
     try {
+      const uploadedName = selectedFile.name;
+      setLastUploadedPdfName(uploadedName);
+
       setUploading(true);
       setErrorMessage("");
       setUploadMessage("");
@@ -122,73 +263,25 @@ export default function App() {
       }
 
       setJobId(newJobId);
-      startPollingJobStatus(newJobId);
+      startPollingJobStatus(newJobId, uploadedName);
     } catch (error) {
       setErrorMessage(error.message || "Upload failed.");
       setIsProcessingPdf(false);
+      setLastUploadedPdfName("");
     } finally {
       setUploading(false);
     }
   };
 
-  const handleChat = async () => {
-    if (isProcessingPdf) {
-      setErrorMessage("PDF abhi process ho rahi hai. Please wait.");
-      return;
-    }
-
-    if (!prompt.trim()) {
-      setErrorMessage("Please enter a question.");
-      return;
-    }
-
-    const currentPrompt = prompt.trim();
-    setErrorMessage("");
-    setPrompt("");
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: currentPrompt,
-        sources: [],
-      },
-    ]);
-
-    try {
-      setChatLoading(true);
-      const data = await chatWithPDF(currentPrompt);
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: data?.answer || "No answer received from server.",
-          sources: Array.isArray(data?.sources) ? data.sources : [],
-        },
-      ]);
-    } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: `Error: ${error.message || "Chat request failed."}`,
-          sources: [],
-        },
-      ]);
-    } finally {
-      setChatLoading(false);
-    }
-  };
-
   const suggestionPrompts = [
-    "Summary batao",
-    "Key points kya hain?",
-    "Important sections explain karo",
-    "Is PDF ka short overview do",
+    "Explain Summary",
+    "What are the key points?",
+    "Explain important points",
+    "Give a short overview of the PDF",
   ];
 
   const isChatDisabled = isProcessingPdf || uploading || chatLoading;
+  const activePdfName = selectedPdfName || pdfList[0] || "";
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-300 dark:bg-[#08090d] dark:text-white">
@@ -237,6 +330,14 @@ export default function App() {
 
         <section className="mt-8 grid gap-8 lg:grid-cols-[380px_1fr]">
           <aside className="rounded-[24px] border border-slate-200 bg-white p-6 shadow-sm transition-colors duration-300 dark:border-white/10 dark:bg-white/5 dark:backdrop-blur-xl">
+            {/* 🚀 JET ANIMATION ADDED HERE */}
+            {/* <div className="mb-6">
+              <VectorSpace
+                isProcessing={isProcessingPdf}
+                isThinking={chatLoading}
+                triggerSearch={chatLoading}
+              />
+            </div> */}
             <p className="text-xs uppercase tracking-[0.24em] text-cyan-700 dark:text-cyan-300/80">
               Step 1
             </p>
@@ -290,6 +391,74 @@ export default function App() {
                 {errorMessage}
               </div>
             )}
+            <div className="mt-6 mb-4">
+              <VectorSpace
+                isProcessing={isProcessingPdf}
+                isThinking={chatLoading}
+                triggerSearch={chatLoading}
+                isDark={isDark} // 📍 Pass the current theme state
+              />
+            </div>
+            <div className="mt-8">
+              <p className="text-xs uppercase tracking-[0.24em] text-cyan-700 dark:text-cyan-300/80">
+                Uploaded PDFs
+              </p>
+
+              <div className="mt-3 space-y-3">
+                {pdfList.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500 dark:border-white/10 dark:bg-white/5 dark:text-white/50">
+                    No PDFs uploaded yet.
+                  </div>
+                ) : (
+                  pdfList.map((pdfName) => {
+                    const isSelected = activePdfName === pdfName;
+
+                    return (
+                      <div
+                        key={pdfName}
+                        className={`flex items-center justify-between gap-3 rounded-2xl border p-3 transition ${isSelected
+                          ? "border-cyan-400 bg-cyan-50 shadow-sm dark:border-cyan-400/60 dark:bg-cyan-400/10"
+                          : "border-slate-200 bg-white dark:border-white/10 dark:bg-white/5"
+                          }`}
+                      >
+                        <button
+                          onClick={() => setSelectedPdfName(pdfName)}
+                          className="flex flex-1 items-center gap-3 text-left"
+                        >
+                          <span
+                            className={`flex h-6 w-6 items-center justify-center rounded-full border text-xs font-bold ${isSelected
+                              ? "border-cyan-500 bg-cyan-500 text-white dark:border-cyan-400 dark:bg-cyan-400 dark:text-black"
+                              : "border-slate-300 text-slate-400 dark:border-white/15 dark:text-white/30"
+                              }`}
+                          >
+                            {isSelected ? "✓" : ""}
+                          </span>
+
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-slate-800 dark:text-white">
+                              {pdfName}
+                            </p>
+                            {isSelected && (
+                              <p className="mt-1 text-xs text-cyan-700 dark:text-cyan-300">
+                                Selected PDF
+                              </p>
+                            )}
+                          </div>
+                        </button>
+
+                        <button
+                          onClick={() => handleDeletePdf(pdfName)}
+                          disabled={deletingPdf === pdfName}
+                          className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:opacity-50 dark:border-rose-400/20 dark:bg-rose-400/10 dark:text-rose-200"
+                        >
+                          {deletingPdf === pdfName ? "Deleting..." : "Delete"}
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
           </aside>
 
           <section
@@ -304,8 +473,8 @@ export default function App() {
                     PDF processing in progress
                   </h4>
                   <p className="mt-2 text-sm text-slate-600 dark:text-white/70">
-                    ⏳ Hum aapki PDF ko padh rahe hain aur vectors bana rahe hain.
-                    Kripya 10-15 second intezar karein...
+                    ⏳ Reading the pdf and creating the vectors.
+                    please wait 10-15 seconds...
                   </p>
                   <p className="mt-2 text-xs text-slate-500 dark:text-white/50">
                     Current status: {jobStatus || "queued"}
@@ -322,14 +491,19 @@ export default function App() {
                 <h3 className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
                   Chat with your PDF
                 </h3>
+                {activePdfName && (
+                  <p className="mt-2 text-sm text-slate-600 dark:text-white/60">
+                    Selected: <span className="font-medium text-cyan-700 dark:text-cyan-300">{activePdfName}</span>
+                  </p>
+                )}
               </div>
 
               <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-white/60">
                 {isProcessingPdf
                   ? "Processing PDF..."
                   : chatLoading
-                  ? "Thinking..."
-                  : "Ready"}
+                    ? "Thinking..."
+                    : "Ready"}
               </div>
             </div>
 
@@ -350,11 +524,10 @@ export default function App() {
               {messages.map((msg, index) => (
                 <div
                   key={index}
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${
-                    msg.role === "user"
-                      ? "ml-auto bg-cyan-500 text-white dark:bg-cyan-400 dark:text-black"
-                      : "bg-white text-slate-900 shadow-sm dark:bg-white/8 dark:text-white"
-                  }`}
+                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-6 ${msg.role === "user"
+                    ? "ml-auto bg-cyan-500 text-white dark:bg-cyan-400 dark:text-black"
+                    : "bg-white text-slate-900 shadow-sm dark:bg-white/8 dark:text-white"
+                    }`}
                 >
                   <p>{msg.content}</p>
 
@@ -368,8 +541,8 @@ export default function App() {
                           {typeof source === "string"
                             ? source
                             : source?.title ||
-                              source?.source ||
-                              JSON.stringify(source)}
+                            source?.source ||
+                            JSON.stringify(source)}
                         </span>
                       ))}
                     </div>
@@ -394,7 +567,7 @@ export default function App() {
                 placeholder={
                   isProcessingPdf
                     ? "PDF is processing... please wait"
-                    : "Ask: summary batao, key points kya hain, etc."
+                    : "Ask: tell me summary, what are the key points, etc."
                 }
                 disabled={isChatDisabled}
                 className="h-14 flex-1 rounded-2xl border border-slate-300 bg-white px-4 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-cyan-500 focus:shadow-[0_0_0_4px_rgba(34,211,238,0.12)] disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-white/35"
