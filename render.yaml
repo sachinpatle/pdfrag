@@ -3,7 +3,7 @@ services:
     name: askpdf-api
     runtime: node
     rootDir: server
-    buildCommand: npm install --legacy-peer-deps
+    buildCommand: npm install --force
     startCommand: npm start
     plan: free
     envVars:
@@ -28,7 +28,7 @@ services:
     name: askpdf-worker
     runtime: node
     rootDir: server
-    buildCommand: npm install --legacy-peer-deps
+    buildCommand: npm install --force
     startCommand: npm run worker
     plan: free
     envVars:
