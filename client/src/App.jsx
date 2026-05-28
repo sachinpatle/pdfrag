@@ -89,7 +89,7 @@ export default function App() {
 
       setSelectedPdfName(pdfs[0]);
     } catch (error) {
-      console.error(error);
+      console.log(error);
     }
   };
 
