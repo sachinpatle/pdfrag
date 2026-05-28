@@ -3,7 +3,7 @@ services:
     name: askpdf-api
     runtime: node
     rootDir: server
-    buildCommand: npm install
+    buildCommand: npm install --legacy-peer-deps
     startCommand: npm start
     plan: free
     envVars:
@@ -12,7 +12,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: REDIS_URL
-        sync: false
+        sync: false 
       - key: QDRANT_URL
         sync: false
       - key: QDRANT_API_KEY
@@ -28,7 +28,7 @@ services:
     name: askpdf-worker
     runtime: node
     rootDir: server
-    buildCommand: npm install
+    buildCommand: npm install --legacy-peer-deps
     startCommand: npm run worker
     plan: free
     envVars:
